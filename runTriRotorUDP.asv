@@ -1,0 +1,59 @@
+function [t_log, x_log, F_log] = runTriRotorUDP(Tsim)
+
+    % === Load LQR gains ===
+    load("trirotor_gains.mat", "K_rot", "M_pinv");
+
+    % === UDP sockets ===
+    uRecv = udpport("datagram","IPV4","LocalPort",5501,"Timeout",1);
+    uSend = udpport("datagram","IPV4","Timeout",1);
+    targetIP = "127.0.0.1"; 
+    targetPort = 5502;
+
+    % === Logging ===
+    maxSteps = ceil(500*Tsim);
+    t_log = nan(maxSteps,1);
+    x_log = nan(maxSteps,6);
+    F_log = nan(maxSteps,3);
+
+    gotHeader = false;
+    k = 0;
+    disp("Running closed-loop LQR...");
+
+    tic;
+    while toc < Tsim
+
+        % read one packet (non-blocking)
+        pkt = read(uRecv, 1, "string");
+        if isempty(pkt), continue; end
+
+        s = pkt.Data;
+        if contains(s, "<LABELS>"), continue; end
+
+        vals = str2double(split(s, ","));
+        if numel(vals) < 8, continue; end
+
+        % State extraction
+        simt = vals(2);
+        x = vals(3:8); % p q r phi theta psi
+
+        % Compute LQR control
+        u_moment = -K_rot * x';          % [τx τy τz]
+        F = M_pinv * [1; u_moment];      % solve for [F1 F2 F3]
+
+        % Send thrusts
+        msg = sprintf("%.6f,%.6f,%.6f", F);
+        write(uSend, msg, "string", targetIP, targetPort);
+
+        % Log
+        k = k + 1;
+        t_log(k) = simt;
+        x_log(k,:) = x;
+        F_log(k,:) = F';
+
+    end
+
+    % crop logs
+    t_log = t_log(1:k);
+    x_log = x_log(1:k,:);
+    F_log = F_log(1:k,:);
+end
